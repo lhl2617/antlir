@@ -5,49 +5,59 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-20.04
+    container: centos:centos8
 
     steps:
+      - name: Install system dependencies
+        run: |
+          yum -y update
+          yum -y install \
+            git \
+            java-11-openjdk \
+            systemd-container \
+            libcap-ng-devel \
+            gcc \
+            gcc-c++ \
+            sudo 
+
+      - name: Install btrfs-progs
+        run: |
+          yum -y install \
+            autoconf \
+            automake \
+            pkg-config \
+            asciidoc \
+            xmlto \
+            e2fsprogs \
+            wget
+          BTRFS_PROGS_VERSION=5.12.1
+          cd /tmp
+          wget https://github.com/kdave/btrfs-progs/archive/refs/tags/v$BTRFS_PROGS_VERSION.tar.gz
+          tar xvf v$BTRFS_PROGS_VERSION.tar.gz
+          cd btrfs-progs-$BTRFS_PROGS_VERSION
+          ./autogen.sh
+          ./configure
+          make
+          make install
+
+      # https://github.com/sclorg/s2i-python-container/blob/master/3.9/Dockerfile.rhel8
+      - name: Install Python
+        run: |
+          INSTALL_PKGS="python39 python39-devel python39-setuptools python39-pip nss_wrapper \
+            httpd httpd-devel mod_ssl mod_auth_gssapi mod_ldap \
+            mod_session atlas-devel gcc-gfortran libffi-devel libtool-ltdl enchant"
+          yum -y module enable python39:3.9 httpd:2.4
+          yum -y --setopt=tsflags=nodocs install $INSTALL_PKGS
+          rpm -V $INSTALL_PKGS
+          ln -fs /usr/bin/python3.9 /usr/bin/python
+          python --version
+
       - uses: actions/checkout@v2
         with:
           submodules: recursive
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y attr libcap-ng-dev systemd-container
-
-      # createrepo_c is not packaged for Ubuntu 20.04. Until it is or until we
-      # can use a hosted runner that is based on CentOS (or Fedora), compile
-      # createrepo_c so that unit tests are able to use it to make ephemeral
-      # rpm repositories.
-      - name: Build createrepo_c
-        run: |
-          sudo apt-get install libssl-dev liblzma-dev libxml2-dev libmagic-dev libcurl4-openssl-dev libbz2-dev librpm-dev
-          curl -L https://github.com/rpm-software-management/createrepo_c/archive/0.16.2.tar.gz | gunzip | tar -x
-          cd createrepo_c-0.16.2
-          mkdir build && cd build
-          cmake .. -DENABLE_DRPM=0 -DWITH_ZCHUNK=0 -DWITH_LIBMODULEMD=0 -DENABLE_PYTHON=0
-          make -j$(nproc)
-          mv src/createrepo_c $GITHUB_WORKSPACE/tools/
-        working-directory: /tmp
-
       - name: Set up $PATH
         run: echo $(pwd)/tools > $GITHUB_PATH
-
-      # antlir is primarily developed on CentOS, which has a 'nobody:nobody'
-      # user and group. GitHub actions is running on ubuntu which uses
-      # 'nobody:nogroup', so create a 'nobody' group to use
-      - name: Set up nobody group
-        run: sudo groupadd nobody; sudo usermod -aG nobody nobody
-
-      - uses: actions/setup-python@v2
-        with:
-          python-version: '~3.9'
-
-      - uses: actions-rs/toolchain@v1
-        with:
-            toolchain: nightly-2021-03-25
-            override: true
 
       - name: Fetch buck
         run: buck --version
@@ -86,8 +96,8 @@ jobs:
         # WARNING: keep this query in sync with the internal one in antlir.td
         # to ensure the same set of tests is run internally and externally
         run: |
-            buck test --always-exclude $(buck query @tools/ci_tests_query) --xml tests.xml > buck.log 2> buck.err || true
-            echo Buck stderr
-            cat buck.err
-            echo Test results
-            ./tools/results_parser.py tests.xml
+          buck test --always-exclude $(buck query @tools/ci_tests_query) --xml tests.xml > buck.log 2> buck.err || true
+          echo Buck stderr
+          cat buck.err
+          echo Test results
+          ./tools/results_parser.py tests.xml
